@@ -1,10 +1,13 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
-import fs from 'fs';
-import path from 'path';
+import { createClient } from '@supabase/supabase-js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 router.get('/images', async (req, res, next) => {
     try {
@@ -38,13 +41,12 @@ router.delete('/images/:id', async (req, res, next) => {
             where: { id }
         });
 
-        // Extract filename from the URL (e.g., /uploads/filename.jpg)
-        // and delete the physical file
-        const filename = image.url.split('/').pop();
-        if (filename) {
-            const filePath = path.join(process.cwd(), 'uploads', filename);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
+        // Delete completely from Supabase Storage by extracting the filename from URL
+        if (image.url && image.url.includes('/gallery/')) {
+            const urlParts = image.url.split('/gallery/');
+            if (urlParts.length > 1) {
+                const filename = urlParts[1];
+                await supabase.storage.from('gallery').remove([filename]);
             }
         }
 

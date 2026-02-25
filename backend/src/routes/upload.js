@@ -2,26 +2,18 @@ import express from 'express';
 import multer from 'multer';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
-import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Ensure uploads directory exists
-const uploadDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
+// Initialize Supabase Client for Backend Storage Auth
+const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/');
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
-    }
-});
+// Use memory storage instead of Disk storage since free servers lose local files
+const storage = multer.memoryStorage();
 
 const upload = multer({
     storage,
@@ -41,12 +33,34 @@ router.post('/upload', upload.single('image'), async (req, res, next) => {
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
-        const fileUrl = `/uploads/${req.file.filename}`;
+        if (!supabaseUrl || !supabaseKey) {
+            throw new Error('Supabase Storage Keys are missing in backend .env');
+        }
 
+        const fileExt = req.file.originalname.split('.').pop();
+        const fileName = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9]/g, '')}.${fileExt}`;
+
+        // 1. Upload the Multer Buffer directly to Supabase Storage
+        const { error: uploadError } = await supabase.storage
+            .from('gallery')
+            .upload(fileName, req.file.buffer, {
+                contentType: req.file.mimetype,
+                cacheControl: '3600',
+                upsert: false
+            });
+
+        if (uploadError) throw new Error(`Supabase Storage Error: ${uploadError.message}`);
+
+        // 2. Get Public URL
+        const { data: { publicUrl } } = supabase.storage
+            .from('gallery')
+            .getPublicUrl(fileName);
+
+        // 3. Save to Prisma Postgres
         const newUpload = await prisma.uploads.create({
             data: {
                 filename: req.file.originalname,
-                url: fileUrl,
+                url: publicUrl,
             }
         });
 
